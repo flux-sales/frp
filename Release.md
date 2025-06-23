@@ -1,7 +1,4 @@
-### Features
+## Features
 
-* Support metadatas and annotations in frpc proxy commands.
-
-### Fixes
-
-* Properly release resources in service.Close() to prevent resource leaks when used as a library.
+* Support for YAML merge functionality (anchors and references with dot-prefixed fields) in strict configuration mode without requiring `--strict-config=false` parameter.
+* Support for proxy protocol in UDP proxies to preserve real client IP addresses.
