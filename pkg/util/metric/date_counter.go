@@ -1,17 +1,3 @@
-// Copyright 2017 fatedier, fatedier@gmail.com
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package metric
 
 import (
@@ -21,7 +7,7 @@ import (
 
 type DateCounter interface {
 	TodayCount() int64
-	GetLastDaysCount(lastdays int64) []int64
+	GetLastDaysCount(days int64) []int64
 	Inc(int64)
 	Dec(int64)
 	Snapshot() DateCounter
@@ -32,103 +18,96 @@ func NewDateCounter(reserveDays int64) DateCounter {
 	if reserveDays <= 0 {
 		reserveDays = 1
 	}
-	return newStandardDateCounter(reserveDays)
+	return &StandardDateCounter{
+		reserveDays:    reserveDays,
+		counts:         make([]int64, reserveDays),
+		lastUpdateDate: dayStart(time.Now()),
+	}
 }
 
 type StandardDateCounter struct {
-	reserveDays int64
-	counts      []int64
-
+	reserveDays    int64
+	counts         []int64
 	lastUpdateDate time.Time
 	mu             sync.Mutex
-}
-
-func newStandardDateCounter(reserveDays int64) *StandardDateCounter {
-	now := time.Now()
-	now = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	s := &StandardDateCounter{
-		reserveDays:    reserveDays,
-		counts:         make([]int64, reserveDays),
-		lastUpdateDate: now,
-	}
-	return s
 }
 
 func (c *StandardDateCounter) TodayCount() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	c.rotate(time.Now())
+	c.rotate()
 	return c.counts[0]
 }
 
-func (c *StandardDateCounter) GetLastDaysCount(lastdays int64) []int64 {
-	if lastdays > c.reserveDays {
-		lastdays = c.reserveDays
+func (c *StandardDateCounter) GetLastDaysCount(days int64) []int64 {
+	if days > c.reserveDays {
+		days = c.reserveDays
 	}
-	counts := make([]int64, lastdays)
+	result := make([]int64, days)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.rotate(time.Now())
-	for i := 0; i < int(lastdays); i++ {
-		counts[i] = c.counts[i]
-	}
-	return counts
+	c.rotate()
+
+	copy(result, c.counts[:days])
+	return result
 }
 
-func (c *StandardDateCounter) Inc(count int64) {
+func (c *StandardDateCounter) Inc(n int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.rotate(time.Now())
-	c.counts[0] += count
+	c.rotate()
+	c.counts[0] += n
 }
 
-func (c *StandardDateCounter) Dec(count int64) {
+func (c *StandardDateCounter) Dec(n int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.rotate(time.Now())
-	c.counts[0] -= count
+	c.rotate()
+	c.counts[0] -= n
 }
 
 func (c *StandardDateCounter) Snapshot() DateCounter {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tmp := newStandardDateCounter(c.reserveDays)
-	for i := 0; i < int(c.reserveDays); i++ {
-		tmp.counts[i] = c.counts[i]
+	clone := &StandardDateCounter{
+		reserveDays:    c.reserveDays,
+		counts:         append([]int64{}, c.counts...), // copy
+		lastUpdateDate: c.lastUpdateDate,
 	}
-	return tmp
+	return clone
 }
 
 func (c *StandardDateCounter) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for i := 0; i < int(c.reserveDays); i++ {
+	for i := range c.counts {
 		c.counts[i] = 0
 	}
 }
 
-// rotate
-// Must hold the lock before calling this function.
-func (c *StandardDateCounter) rotate(now time.Time) {
-	now = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	days := int(now.Sub(c.lastUpdateDate).Hours() / 24)
+func (c *StandardDateCounter) rotate() {
+	now := dayStart(time.Now())
+	daysPassed := int(now.Sub(c.lastUpdateDate).Hours() / 24)
 
-	defer func() {
-		c.lastUpdateDate = now
-	}()
-
-	if days <= 0 {
-		return
-	} else if days >= int(c.reserveDays) {
-		c.counts = make([]int64, c.reserveDays)
+	if daysPassed <= 0 {
 		return
 	}
-	newCounts := make([]int64, c.reserveDays)
 
-	for i := days; i < int(c.reserveDays); i++ {
-		newCounts[i] = c.counts[i-days]
+	if daysPassed >= int(c.reserveDays) {
+		for i := range c.counts {
+			c.counts[i] = 0
+		}
+	} else {
+		copy(c.counts[daysPassed:], c.counts[:len(c.counts)-daysPassed])
+		for i := 0; i < daysPassed; i++ {
+			c.counts[i] = 0
+		}
 	}
-	c.counts = newCounts
+
+	c.lastUpdateDate = now
+}
+
+func dayStart(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
